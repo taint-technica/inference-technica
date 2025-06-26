@@ -5,3 +5,4 @@ build/
 xinference.egg-info/
 xinference/web/ui/build/
 xinference/web/ui/node_modules/
+Dockerfile

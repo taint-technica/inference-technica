@@ -6,11 +6,11 @@ WORKDIR /opt/inference
 RUN apt-get update && apt-get -y install wget
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
 RUN dpkg -i cuda-keyring_1.1-1_all.deb
-RUN apt-get update && apt-get -y install cuda-toolkit-12-9
+RUN apt-get update && apt-get -y install cuda-toolkit-12-4
 
 ENV CUDA_HOME /usr/local/cuda
 ENV PATH ${CUDA_HOME}/bin:${PATH}
-ENV LD_LIBRARY_PATH /usr/local/cuda-12.9/lib64:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH /usr/local/cuda-12.6/lib64:${LD_LIBRARY_PATH}
 
 ENV NVM_DIR /usr/local/nvm
 ENV NODE_VERSION 14.21.1
@@ -51,9 +51,10 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     uv pip install --system -e "python[all]" && \
     cd .. && \
 
-    # Install flashinfer
-    uv pip uninstall --system flashinfer && \
-    uv pip install --system flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.4 && \
+    # # Install flashinfer
+    # uv pip uninstall --system flashinfer && \
+    # uv pip install --system flashinfer-python \
+
     cd /opt/inference && \
     python3 setup.py build_web && \
     git restore . && \
@@ -61,7 +62,7 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     uv pip uninstall --system xllamacpp && \
     uv pip install --system "xllamacpp>=0.1.18" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
     # clean packages
-    uv pip cache purge
+    uv clean
 
 # Install Miniforge3 (only for FFmpeg, do not replace system Python)
 RUN wget -O Miniforge3.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" && \
@@ -74,5 +75,5 @@ RUN /opt/conda/bin/conda create -n ffmpeg-env -c conda-forge 'ffmpeg<7' -y && \
     /opt/conda/bin/conda clean --all -y
 
 # Overwrite the entrypoint of vllm's base image
-ENTRYPOINT []
-CMD ["/bin/bash"]
+ENTRYPOINT ["xinference-local"]
+CMD ["--host", "0.0.0.0", "--port", "9997"]
