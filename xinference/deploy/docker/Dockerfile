@@ -3,6 +3,15 @@ FROM vllm/vllm-openai:v0.6.0
 COPY . /opt/inference
 WORKDIR /opt/inference
 
+RUN apt-get update && apt-get -y install wget
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+RUN dpkg -i cuda-keyring_1.1-1_all.deb
+RUN apt-get update && apt-get -y install cuda-toolkit-12-9
+
+ENV CUDA_HOME /usr/local/cuda
+ENV PATH ${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH /usr/local/cuda-12.9/lib64:${LD_LIBRARY_PATH}
+
 ENV NVM_DIR /usr/local/nvm
 ENV NODE_VERSION 14.21.1
 
@@ -23,26 +32,36 @@ RUN apt-get -y update \
 ENV PATH $NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH
 ENV LD_LIBRARY_PATH $LD_LIBRARY_PATH:/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib
 ENV FLASH_ATTENTION_SKIP_CUDA_BUILD TRUE
+ENV UV_HTTP_TIMEOUT=300
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ARG PIP_INDEX=https://pypi.org/simple
-RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel&& \
-    pip install -i "$PIP_INDEX" "diskcache>=5.6.1" "jinja2>=2.11.3" && \
-    pip install flash-attn==2.7.4.post1 --no-build-isolation && \
-    pip install -i "$PIP_INDEX" --upgrade-strategy only-if-needed -r /opt/inference/xinference/deploy/docker/requirements-base.txt && \
-    pip install -i "$PIP_INDEX" --upgrade-strategy only-if-needed -r /opt/inference/xinference/deploy/docker/requirements-ml.txt && \
-    pip install -i "$PIP_INDEX" --upgrade-strategy only-if-needed -r /opt/inference/xinference/deploy/docker/requirements-models.txt && \
-    pip install -i "$PIP_INDEX" transformers>=4.51.3 && \
-    pip install -i "$PIP_INDEX" --no-deps sglang && \
-    pip uninstall flashinfer -y && \
-    pip install flashinfer-python==0.4.6.post5 -i https://flashinfer.ai/whl/cu124/torch2.6 && \
+RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
+    uv pip install --system -i "$PIP_INDEX" "diskcache>=5.6.1" "jinja2>=2.11.3" && \
+    uv pip install --system flash-attn==2.7.4.post1 --no-build-isolation && \
+    uv pip install --system -i "$PIP_INDEX" --upgrade -r /opt/inference/xinference/deploy/docker/requirements-base.txt && \
+    uv pip install --system -i "$PIP_INDEX" --upgrade -r /opt/inference/xinference/deploy/docker/requirements-ml.txt && \
+    uv pip install --system -i "$PIP_INDEX" --upgrade -r /opt/inference/xinference/deploy/docker/requirements-models.txt && \
+    uv pip install --system -i "$PIP_INDEX" transformers>=4.51.3 && \
+
+    # Install the forked sglang version from taint-technica
+    git clone https://github.com/taint-technica/sglang-technica.git && \
+    cd sglang-technica && \
+    uv pip install --system -e "python[all]" && \
+    cd .. && \
+
+    # Install flashinfer
+    uv pip uninstall --system flashinfer && \
+    uv pip install --system flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.4 && \
     cd /opt/inference && \
     python3 setup.py build_web && \
     git restore . && \
-    pip install -i "$PIP_INDEX" --no-deps "." && \
-    pip uninstall xllamacpp -y && \
-    pip install "xllamacpp>=0.1.18" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
+    uv pip install --system -i "$PIP_INDEX" --no-deps "." && \
+    uv pip uninstall --system xllamacpp && \
+    uv pip install --system "xllamacpp>=0.1.18" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
     # clean packages
-    pip cache purge
+    uv pip cache purge
 
 # Install Miniforge3 (only for FFmpeg, do not replace system Python)
 RUN wget -O Miniforge3.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" && \
