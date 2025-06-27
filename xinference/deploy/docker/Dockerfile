@@ -57,7 +57,7 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
 
     cd /opt/inference && \
     python3 setup.py build_web && \
-    git restore . && \
+    (git restore . || true) && \
     uv pip install --system -i "$PIP_INDEX" --no-deps "." && \
     uv pip uninstall --system xllamacpp && \
     uv pip install --system "xllamacpp>=0.1.18" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
