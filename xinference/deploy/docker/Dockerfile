@@ -51,21 +51,22 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     uv pip install --system -e "python[all]" && \
     cd .. && \
 
-    # # Install flashinfer
-    # uv pip uninstall --system flashinfer && \
-    # uv pip install --system flashinfer-python \
+    uv pip install torch==2.6.0 && \
 
+    uv pip uninstall flashinfer && \
+    uv pip install flashinfer-python==0.4.6.post5 -i https://flashinfer.ai/whl/cu124/torch2.6 && \
     cd /opt/inference && \
     python3 setup.py build_web && \
     (git restore . || true) && \
     uv pip install --system -i "$PIP_INDEX" --no-deps "." && \
     uv pip uninstall --system xllamacpp && \
-    uv pip install --system "xllamacpp>=0.1.18" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
+    uv pip install "xllamacpp>=0.1.21" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
     # clean packages
     uv clean
 
 # Install Miniforge3 (only for FFmpeg, do not replace system Python)
-RUN wget -O Miniforge3.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" && \
+RUN apt-get install -y wget && \
+    wget -O Miniforge3.sh "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" && \
     bash Miniforge3.sh -b -p /opt/conda && \
     rm Miniforge3.sh
 
