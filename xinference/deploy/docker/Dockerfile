@@ -1,16 +1,20 @@
-FROM vllm/vllm-openai:v0.6.0
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
-COPY . /opt/inference
 WORKDIR /opt/inference
 
-RUN apt-get update && apt-get -y install wget
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-RUN dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
-RUN apt-get update && apt-get -y install cuda-toolkit-12-4
+# Copy only requirements files first for better Docker layer caching
+COPY xinference/deploy/docker/requirements-base.txt xinference/deploy/docker/requirements-base.txt
+COPY xinference/deploy/docker/requirements-ml.txt xinference/deploy/docker/requirements-ml.txt
+COPY xinference/deploy/docker/requirements-models.txt xinference/deploy/docker/requirements-models.txt
 
-ENV CUDA_HOME /usr/local/cuda
-ENV PATH ${CUDA_HOME}/bin:${PATH}
-ENV LD_LIBRARY_PATH /usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
+# RUN apt-get update && apt-get -y install wget
+# RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+# RUN dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
+# RUN apt-get update && apt-get -y install cuda-toolkit-12-4
+
+# ENV CUDA_HOME /usr/local/cuda
+# ENV PATH ${CUDA_HOME}/bin:${PATH}
+# ENV LD_LIBRARY_PATH /usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
 
 ENV NVM_DIR /usr/local/nvm
 ENV NODE_VERSION 14.21.1
@@ -37,8 +41,15 @@ ENV UV_HTTP_TIMEOUT=300
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ARG PIP_INDEX=https://pypi.org/simple
+
+# Install python 3.10
+RUN apt install software-properties-common -y && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt update && apt install python3.10 python3.10-venv python3.10-dev python3-pip -y
+
 RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     uv pip install --system -i "$PIP_INDEX" "diskcache>=5.6.1" "jinja2>=2.11.3" && \
+    uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 && \
     uv pip install --system flash-attn==2.7.4.post1 --no-build-isolation && \
     uv pip install --system -i "$PIP_INDEX" --upgrade -r /opt/inference/xinference/deploy/docker/requirements-base.txt && \
     uv pip install --system -i "$PIP_INDEX" --upgrade -r /opt/inference/xinference/deploy/docker/requirements-ml.txt && \
@@ -52,17 +63,18 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     uv pip install --system -e "python[all]" && \
     cd /opt/inference && \
 
-    uv pip install --system torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124 && \
+    # Install vllm
+    uv pip install --system vllm --torch-backend=auto
 
-    uv pip uninstall --system flashinfer && \
-    uv pip install --system flashinfer-python==0.2.5+cu124torch2.6 -i https://flashinfer.ai/whl/cu124/torch2.6 && \
-    cd /opt/inference && \
-    python3 setup.py build_web && \
+# Copy the rest of the source code (after heavy installations for better caching)
+COPY . /opt/inference
+
+# Build the web UI and install the package
+RUN python3 setup.py build_web && \
     (git restore . || true) && \
     uv pip install --system -i "$PIP_INDEX" --no-deps "." && \
     uv pip uninstall --system xllamacpp && \
     uv pip install --system "xllamacpp>=0.1.21" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
-    # clean packages
     uv clean
 
 # Install Miniforge3 (only for FFmpeg, do not replace system Python)
