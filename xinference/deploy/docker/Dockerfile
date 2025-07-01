@@ -51,16 +51,16 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     uv pip install --system -e "python[all]" && \
     cd .. && \
 
-    uv pip install torch==2.6.0 && \
+    uv pip install --system torch==2.6.0 && \
 
-    uv pip uninstall flashinfer && \
-    uv pip install flashinfer-python==0.4.6.post5 -i https://flashinfer.ai/whl/cu124/torch2.6 && \
+    uv pip uninstall --system flashinfer && \
+    uv pip install --system flashinfer-python==0.2.5+cu124torch2.6 -i https://flashinfer.ai/whl/cu124/torch2.6 && \
     cd /opt/inference && \
     python3 setup.py build_web && \
     (git restore . || true) && \
     uv pip install --system -i "$PIP_INDEX" --no-deps "." && \
     uv pip uninstall --system xllamacpp && \
-    uv pip install "xllamacpp>=0.1.21" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
+    uv pip install --system "xllamacpp>=0.1.21" --index-url https://xorbitsai.github.io/xllamacpp/whl/cu124 && \
     # clean packages
     uv clean
 
