@@ -10,7 +10,7 @@ RUN apt-get update && apt-get -y install cuda-toolkit-12-4
 
 ENV CUDA_HOME /usr/local/cuda
 ENV PATH ${CUDA_HOME}/bin:${PATH}
-ENV LD_LIBRARY_PATH /usr/local/cuda-12.6/lib64:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH /usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH}
 
 ENV NVM_DIR /usr/local/nvm
 ENV NODE_VERSION 14.21.1
