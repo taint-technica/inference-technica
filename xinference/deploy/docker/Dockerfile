@@ -5,7 +5,7 @@ WORKDIR /opt/inference
 
 RUN apt-get update && apt-get -y install wget
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-RUN dpkg -i cuda-keyring_1.1-1_all.deb
+RUN dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
 RUN apt-get update && apt-get -y install cuda-toolkit-12-4
 
 ENV CUDA_HOME /usr/local/cuda
@@ -46,12 +46,13 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     uv pip install --system -i "$PIP_INDEX" transformers>=4.51.3 && \
 
     # Install the forked sglang version from taint-technica
+    cd /opt && \
     git clone https://github.com/taint-technica/sglang-technica.git && \
     cd sglang-technica && \
     uv pip install --system -e "python[all]" && \
-    cd .. && \
+    cd /opt/inference && \
 
-    uv pip install --system torch==2.6.0 && \
+    uv pip install --system torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124 && \
 
     uv pip uninstall --system flashinfer && \
     uv pip install --system flashinfer-python==0.2.5+cu124torch2.6 -i https://flashinfer.ai/whl/cu124/torch2.6 && \

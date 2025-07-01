@@ -1,0 +1,1 @@
+docker build -f ./xinference/deploy/docker/Dockerfile -t xinference:latest .
