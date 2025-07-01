@@ -51,6 +51,9 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     uv pip install --system -i "$PIP_INDEX" "diskcache>=5.6.1" "jinja2>=2.11.3" && \
     uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124 && \
     uv pip install --system flash-attn==2.7.4.post1 --no-build-isolation && \
+
+    # Uninstall torch
+    uv pip uninstall --system torch torchvision torchaudio && \
     uv pip install --system -i "$PIP_INDEX" --upgrade -r /opt/inference/xinference/deploy/docker/requirements-base.txt && \
     uv pip install --system -i "$PIP_INDEX" --upgrade -r /opt/inference/xinference/deploy/docker/requirements-ml.txt && \
     uv pip install --system -i "$PIP_INDEX" --upgrade -r /opt/inference/xinference/deploy/docker/requirements-models.txt && \
@@ -61,10 +64,10 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     git clone https://github.com/taint-technica/sglang-technica.git && \
     cd sglang-technica && \
     uv pip install --system -e "python[all]" && \
-    cd /opt/inference && \
+    cd /opt/inference
 
-    # Install vllm
-    uv pip install --system vllm --torch-backend=auto
+    # # Install vllm
+    # uv pip install --system vllm --torch-backend=auto
 
 # Copy the rest of the source code (after heavy installations for better caching)
 COPY . /opt/inference
