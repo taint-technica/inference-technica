@@ -14,9 +14,10 @@ Usage:
 """
 
 import openai
+from typing import List, Dict, Any
 
 # Define a simple weather function for testing
-tools = [
+tools: List[Dict[str, Any]]= [
     {
         "type": "function",
         "function": {
@@ -120,7 +121,7 @@ def test_sglang_function_calling():
             response = client.chat.completions.create(
                 model="qwen3",  # Use appropriate SGLang model
                 messages=test_case["messages"],
-                tools=tools,
+                tools=list(tools),
                 temperature=0.1,
             )
 

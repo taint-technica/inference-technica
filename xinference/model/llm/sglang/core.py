@@ -620,10 +620,13 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
             f"{self._engine.generate_url.replace('/generate', '/parse_function_call')}"
         )
 
+        # Ensure tools is a concrete list for JSON serialization
+        tools_list = list(tools) if tools else []
+
         function_call_input = {
             "text": generated_text,
             "tool_call_parser": tool_call_parser,
-            "tools": tools,
+            "tools": tools_list,
         }
 
         async with aiohttp.ClientSession(trust_env=True) as session:
@@ -708,8 +711,10 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
     ) -> Union[ChatCompletion, AsyncGenerator[ChatCompletionChunk, None]]:
         assert self.model_family.chat_template is not None
 
-        # Extract tools from generate_config
+        # Extract tools from generate_config and ensure it's a concrete list
         tools = generate_config.pop("tools", []) if generate_config else None
+        if tools is not None:
+            tools = list(tools)  # Convert to concrete list if it's an iterator
         model_family = self.model_family.model_family or self.model_family.model_name
 
         chat_template_kwargs = (
