@@ -303,7 +303,8 @@ class SGLANGModel(LLM):
         # See https://github.com/sgl-project/sglang/blob/main/python/sglang/lang/ir.py#L120
         # 16 is too less, so here set 256 by default
         generate_config.setdefault(
-            "max_new_tokens", generate_config.pop("max_tokens", 256)  # type: ignore
+            "max_new_tokens",
+            generate_config.pop("max_tokens", 256),  # type: ignore
         )
         generate_config.setdefault("stop", [])
         generate_config.setdefault("stream", False)
@@ -328,7 +329,7 @@ class SGLANGModel(LLM):
         if llm_spec.model_format not in ["pytorch", "gptq", "awq", "fp8"]:
             return False
         if llm_spec.model_format == "pytorch":
-            if quantization != "none" and not (quantization is None):
+            if quantization != "none" and quantization is not None:
                 return False
         if isinstance(llm_family, CustomLLMFamilyV1):
             if llm_family.model_family not in SGLANG_SUPPORTED_MODELS:
@@ -414,7 +415,8 @@ class SGLANGModel(LLM):
         timeout = aiohttp.ClientTimeout(total=3 * 3600)
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
             async with session.post(
-                self._engine.generate_url, json=json_data  # type: ignore
+                self._engine.generate_url,
+                json=json_data,  # type: ignore
             ) as response:
                 async for chunk, _ in response.content.iter_chunks():
                     chunk = chunk.decode("utf-8")
@@ -449,7 +451,8 @@ class SGLANGModel(LLM):
         }
         async with aiohttp.ClientSession(trust_env=True) as session:
             async with session.post(
-                self._engine.generate_url, json=json_data  # type: ignore
+                self._engine.generate_url,
+                json=json_data,  # type: ignore
             ) as response:
                 return await response.json()
 
@@ -552,7 +555,7 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         if llm_spec.model_format not in ["pytorch", "gptq", "awq", "fp8"]:
             return False
         if llm_spec.model_format == "pytorch":
-            if quantization != "none" and not (quantization is None):
+            if quantization != "none" and quantization is not None:
                 return False
         if isinstance(llm_family, CustomLLMFamilyV1):
             if llm_family.model_family not in SGLANG_SUPPORTED_CHAT_MODELS:
@@ -576,6 +579,127 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         generate_config.pop("chat_template_kwargs", None)
         return generate_config
 
+    def _get_tool_call_parser(self, model_family: str) -> str:
+        """
+        Get the appropriate tool call parser based on model family
+        """
+        from ..utils import (
+            DEEPSEEK_TOOL_CALL_FAMILY,
+            LLAMA3_TOOL_CALL_FAMILY,
+            QWEN_TOOL_CALL_FAMILY,
+        )
+
+        if model_family in QWEN_TOOL_CALL_FAMILY:
+            return "qwen25"
+        elif model_family in DEEPSEEK_TOOL_CALL_FAMILY:
+            return "deepseek"
+        elif model_family in LLAMA3_TOOL_CALL_FAMILY:
+            return "llama3"
+        else:
+            # Default to qwen25 for unknown models
+            return "qwen25"
+
+    async def _parse_function_calls(
+        self,
+        generated_text: str,
+        tools: List[Dict],
+        tool_call_parser: Optional[str] = None,
+    ) -> Dict:
+        """
+        Parse function calls from generated text using SGLang's /parse_function_call endpoint
+        """
+        import aiohttp
+
+        if tool_call_parser is None:
+            model_family = (
+                self.model_family.model_family or self.model_family.model_name
+            )
+            tool_call_parser = self._get_tool_call_parser(model_family)
+
+        parse_url = (
+            f"{self._engine.generate_url.replace('/generate', '/parse_function_call')}"
+        )
+
+        function_call_input = {
+            "text": generated_text,
+            "tool_call_parser": tool_call_parser,
+            "tools": tools,
+        }
+
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            async with session.post(parse_url, json=function_call_input) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.warning(f"Failed to parse function calls: {response.status}")
+                    return {"normal_text": generated_text, "calls": []}
+
+    def _convert_parsed_calls_to_chat_completion(
+        self, completion: Completion, parsed_calls: Dict, request_id: str
+    ) -> ChatCompletion:
+        """
+        Convert parsed function calls to chat completion format
+        """
+        import json
+        import time
+        import uuid
+
+        normal_text = parsed_calls.get("normal_text", "")
+        calls = parsed_calls.get("calls", [])
+
+        tool_calls = []
+        for call in calls:
+            tool_calls.append(
+                {
+                    "id": f"call_{uuid.uuid4()}",
+                    "type": "function",
+                    "function": {
+                        "name": call["name"],
+                        "arguments": json.dumps(call["parameters"], ensure_ascii=False),
+                    },
+                }
+            )
+
+        finish_reason = "tool_calls" if tool_calls else "stop"
+        content = normal_text if normal_text.strip() else None
+
+        # For Qwen models, set content to empty string when there are tool calls
+        from ..utils import QWEN_TOOL_CALL_FAMILY
+
+        model_family = self.model_family.model_family or self.model_family.model_name
+        if tool_calls and model_family in QWEN_TOOL_CALL_FAMILY and content is None:
+            content = ""
+
+        message = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tool_calls,
+        }
+
+        usage = completion.get(
+            "usage",
+            {
+                "prompt_tokens": -1,
+                "completion_tokens": -1,
+                "total_tokens": -1,
+            },
+        )
+
+        return {
+            "id": f"chatcmpl-{request_id}",
+            "model": self.model_uid,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finish_reason,
+                }
+            ],
+            "usage": usage,
+        }
+
     async def async_chat(
         self,
         messages: List[Dict],
@@ -583,6 +707,11 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         request_id: Optional[str] = None,
     ) -> Union[ChatCompletion, AsyncGenerator[ChatCompletionChunk, None]]:
         assert self.model_family.chat_template is not None
+
+        # Extract tools from generate_config
+        tools = generate_config.pop("tools", []) if generate_config else None
+        model_family = self.model_family.model_family or self.model_family.model_name
+
         chat_template_kwargs = (
             self._get_chat_template_kwargs_from_generate_config(
                 generate_config, self.reasoning_parser
@@ -591,19 +720,51 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         )
         chat_context_var.set(chat_template_kwargs)
         full_context_kwargs = chat_template_kwargs.copy()
+
+        # Add tools to chat template kwargs if the model supports tool calling
+        from ..utils import (
+            DEEPSEEK_TOOL_CALL_FAMILY,
+            LLAMA3_TOOL_CALL_FAMILY,
+            QWEN_TOOL_CALL_FAMILY,
+        )
+
+        if tools and (
+            model_family in QWEN_TOOL_CALL_FAMILY
+            or model_family in DEEPSEEK_TOOL_CALL_FAMILY
+            or model_family in LLAMA3_TOOL_CALL_FAMILY
+        ):
+            full_context_kwargs["tools"] = tools
+
         full_prompt = self.get_full_context(
             messages, self.model_family.chat_template, **full_context_kwargs
         )
         generate_config = self._sanitize_chat_config(generate_config)
         stream = generate_config.get("stream", None)
+
+        if not request_id:
+            request_id = str(uuid.uuid1())
+
         if stream:
-            agen = await self.async_generate(full_prompt, generate_config=generate_config)  # type: ignore
+            # For streaming, we currently don't support function call parsing
+            # This would require more complex implementation to handle partial responses
+            agen = await self.async_generate(
+                full_prompt, generate_config=generate_config
+            )  # type: ignore
             assert isinstance(agen, AsyncGenerator)
             return self._async_to_chat_completion_chunks(agen, self.reasoning_parser)
         else:
             c = await self.async_generate(full_prompt, generate_config=generate_config)  # type: ignore
             assert not isinstance(c, AsyncGenerator)
-            return self._to_chat_completion(c, self.reasoning_parser)
+
+            # If tools are provided, parse function calls
+            if tools:
+                generated_text = c["choices"][0]["text"]
+                parsed_calls = await self._parse_function_calls(generated_text, tools)
+                return self._convert_parsed_calls_to_chat_completion(
+                    c, parsed_calls, request_id
+                )
+            else:
+                return self._to_chat_completion(c, self.reasoning_parser)
 
 
 class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
@@ -618,7 +779,7 @@ class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
         if llm_spec.model_format not in ["pytorch", "gptq", "awq", "fp8"]:
             return False
         if llm_spec.model_format == "pytorch":
-            if quantization != "none" and not (quantization is None):
+            if quantization != "none" and quantization is not None:
                 return False
         if isinstance(llm_family, CustomLLMFamilyV1):
             if llm_family.model_family not in SGLANG_SUPPORTED_VISION_MODEL_LIST:
@@ -655,6 +816,10 @@ class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
 
         messages = self._transform_messages(messages)
 
+        # Extract tools from generate_config
+        tools = generate_config.pop("tools", []) if generate_config else None
+        model_family = self.model_family.model_family or self.model_family.model_name
+
         chat_template: str = (
             self.model_family.chat_template if self.model_family.chat_template else ""
         )
@@ -666,6 +831,21 @@ class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
         )
         chat_context_var.set(chat_template_kwargs)
         full_context_kwargs = chat_template_kwargs.copy()
+
+        # Add tools to chat template kwargs if the model supports tool calling
+        from ..utils import (
+            DEEPSEEK_TOOL_CALL_FAMILY,
+            LLAMA3_TOOL_CALL_FAMILY,
+            QWEN_TOOL_CALL_FAMILY,
+        )
+
+        if tools and (
+            model_family in QWEN_TOOL_CALL_FAMILY
+            or model_family in DEEPSEEK_TOOL_CALL_FAMILY
+            or model_family in LLAMA3_TOOL_CALL_FAMILY
+        ):
+            full_context_kwargs["tools"] = tools
+
         prompt = self.get_full_context(messages, chat_template, **full_context_kwargs)
 
         images, video_inputs = process_vision_info(messages)
@@ -689,11 +869,30 @@ class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
 
         generate_config = self._sanitize_chat_config(generate_config)
         stream = generate_config.get("stream", None)
+
+        if not request_id:
+            request_id = str(uuid.uuid1())
+
         if stream:
-            agen = await self.async_generate(prompt, image_data=base64_images, generate_config=generate_config)  # type: ignore
+            # For streaming, we currently don't support function call parsing
+            # This would require more complex implementation to handle partial responses
+            agen = await self.async_generate(
+                prompt, image_data=base64_images, generate_config=generate_config
+            )  # type: ignore
             assert isinstance(agen, AsyncGenerator)
             return self._async_to_chat_completion_chunks(agen, self.reasoning_parser)
         else:
-            c = await self.async_generate(prompt, image_data=base64_images, generate_config=generate_config)  # type: ignore
+            c = await self.async_generate(
+                prompt, image_data=base64_images, generate_config=generate_config
+            )  # type: ignore
             assert not isinstance(c, AsyncGenerator)
-            return self._to_chat_completion(c, self.reasoning_parser)
+
+            # If tools are provided, parse function calls
+            if tools:
+                generated_text = c["choices"][0]["text"]
+                parsed_calls = await self._parse_function_calls(generated_text, tools)
+                return self._convert_parsed_calls_to_chat_completion(
+                    c, parsed_calls, request_id
+                )
+            else:
+                return self._to_chat_completion(c, self.reasoning_parser)
