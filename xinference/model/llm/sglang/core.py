@@ -66,6 +66,11 @@ class SGLANGGenerateConfig(TypedDict, total=False):
     stream: bool
     stream_options: Optional[Union[dict, None]]
     extra_body: Optional[Union[dict, None]]
+    # SGLang structured output parameters
+    json_schema: Optional[Union[str, dict]]
+    ebnf: Optional[str]
+    regex: Optional[str]
+    structural_tag: Optional[Union[str, dict]]
 
 
 try:
@@ -327,6 +332,20 @@ class SGLANGModel(LLM):
         generate_config.setdefault("stream_options", stream_options)
         generate_config.setdefault("ignore_eos", False)
 
+        # Handle SGLang structured output parameters - ensure only one is set
+        structured_params = ["json_schema", "ebnf", "regex", "structural_tag"]
+        active_params = [
+            param
+            for param in structured_params
+            if param in generate_config and generate_config[param] is not None
+        ]
+
+        if len(active_params) > 1:
+            # Keep only the first one found, remove others
+            for i, param in enumerate(active_params):
+                if i > 0:
+                    generate_config.pop(param, None)
+
         return generate_config
 
     @classmethod
@@ -408,6 +427,22 @@ class SGLANGModel(LLM):
     def _filter_sampling_params(cls, sampling_params: dict):
         if not sampling_params.get("lora_name"):
             sampling_params.pop("lora_name", None)
+
+        # Keep SGLang structured output parameters
+        sglang_structured_params = ["json_schema", "ebnf", "regex", "structural_tag"]
+        for param in sglang_structured_params:
+            if param in sampling_params and sampling_params[param] is not None:
+                # Ensure only one structured output parameter is used at a time
+                other_params = [p for p in sglang_structured_params if p != param]
+                for other_param in other_params:
+                    if (
+                        other_param in sampling_params
+                        and sampling_params[other_param] is not None
+                    ):
+                        # Remove other structured output parameters to enforce single usage rule
+                        sampling_params.pop(other_param, None)
+                break
+
         return sampling_params
 
     async def _stream_generate(
@@ -560,7 +595,7 @@ class SGLANGModel(LLM):
                     yield chunk
 
             return stream_results()
-    
+
     async def _parse_function_calls(
         self,
         generated_text: str,
@@ -598,7 +633,7 @@ class SGLANGModel(LLM):
                 else:
                     logger.warning(f"Failed to parse function calls: {response.status}")
                     return {"normal_text": generated_text, "calls": []}
-    
+
     async def _parse_reasoning_content(
         self,
         generated_text: str,
@@ -607,32 +642,36 @@ class SGLANGModel(LLM):
         Parse reasoning content from generated text with sglang /separate_reasoning endpoint
         """
         import aiohttp
-        
+
         parse_url = (
             f"{self._engine.generate_url.replace('/generate', '/separate_reasoning')}"
         )
-        
+
         # "qwen3" if model is in Qwen3 and QwQ series, "deepseek-r1" if model is in DeepSeek-R1 series
         model_name = self.model_family.model_name
-        if (model_name.lower().startswith("qwq") or model_name.lower().startswith("qwen3")):
+        if model_name.lower().startswith("qwq") or model_name.lower().startswith(
+            "qwen3"
+        ):
             reasoning_parser = "qwen3"
         elif model_name.lower().startswith("deepseek-r1"):
             reasoning_parser = "deepseek-r1"
         else:
             raise ValueError(f"Unsupported model: {model_name}")
-        
+
         separate_reasoning_data = {
             "text": generated_text,
             "reasoning_parser": reasoning_parser,
         }
-                
+
         async with aiohttp.ClientSession(trust_env=True) as session:
-            async with session.post(parse_url, json=separate_reasoning_data) as response:
+            async with session.post(
+                parse_url, json=separate_reasoning_data
+            ) as response:
                 if response.status == 200:
                     return await response.json()
                 else:
                     return {"normal_text": generated_text, "reasoning_content": ""}
-    
+
     def _get_tool_call_parser(self, model_family: str) -> str:
         """
         Get the appropriate tool call parser based on model family
@@ -693,7 +732,7 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         request_id: Optional[str] = None,
     ) -> Union[ChatCompletion, AsyncGenerator[ChatCompletionChunk, None]]:
         assert self.model_family.chat_template is not None
-        
+
         logger.debug(f"=====Generate config: {generate_config}")
 
         # Extract tools from generate_config and ensure it's a concrete list
@@ -746,23 +785,37 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
             # If tools are provided, parse function calls
             if tools:
                 generated_text = c["choices"][0]["text"]
-                
+
                 parsed_calls = await self._parse_function_calls(generated_text, tools)
-                
-                if self.reasoning_content and self.model_family.model_name in SGLANG_SUPPORTED_REASONING_MODELS:
-                    parsed_reasoning_content = await self._parse_reasoning_content(parsed_calls.get("normal_text", ""))
+
+                if (
+                    self.reasoning_content
+                    and self.model_family.model_name
+                    in SGLANG_SUPPORTED_REASONING_MODELS
+                ):
+                    parsed_reasoning_content = await self._parse_reasoning_content(
+                        parsed_calls.get("normal_text", "")
+                    )
                 else:
                     parsed_reasoning_content = {"text": "", "reasoning_text": ""}
-                    
+
                 return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(
                     c, parsed_calls, parsed_reasoning_content
                 )
             else:
-                if self.reasoning_content and self.model_family.model_name in SGLANG_SUPPORTED_REASONING_MODELS:
-                    parsed_reasoning_content = await self._parse_reasoning_content(c["choices"][0]["text"])
+                if (
+                    self.reasoning_content
+                    and self.model_family.model_name
+                    in SGLANG_SUPPORTED_REASONING_MODELS
+                ):
+                    parsed_reasoning_content = await self._parse_reasoning_content(
+                        c["choices"][0]["text"]
+                    )
                 else:
                     parsed_reasoning_content = {"text": "", "reasoning_text": ""}
-                return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(c, parsed_reasoning_content=parsed_reasoning_content)
+                return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(
+                    c, parsed_reasoning_content=parsed_reasoning_content
+                )
 
 
 class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
@@ -889,19 +942,33 @@ class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
             if tools:
                 generated_text = c["choices"][0]["text"]
                 parsed_calls = await self._parse_function_calls(generated_text, tools)
-                
+
                 # Check if model config has reasoning_content enabled
-                if self._model_config.get("reasoning_content", False) and self.model_family.model_name in SGLANG_SUPPORTED_REASONING_MODELS:
-                    parsed_reasoning_content = await self._parse_reasoning_content(parsed_calls.get("normal_text", ""))
+                if (
+                    self._model_config.get("reasoning_content", False)
+                    and self.model_family.model_name
+                    in SGLANG_SUPPORTED_REASONING_MODELS
+                ):
+                    parsed_reasoning_content = await self._parse_reasoning_content(
+                        parsed_calls.get("normal_text", "")
+                    )
                 else:
                     parsed_reasoning_content = {"text": "", "reasoning_text": ""}
-                    
+
                 return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(
                     c, parsed_calls, parsed_reasoning_content
                 )
             else:
-                if self.reasoning_content and self.model_family.model_name in SGLANG_SUPPORTED_REASONING_MODELS:
-                    parsed_reasoning_content = await self._parse_reasoning_content(c["choices"][0]["text"])
+                if (
+                    self.reasoning_content
+                    and self.model_family.model_name
+                    in SGLANG_SUPPORTED_REASONING_MODELS
+                ):
+                    parsed_reasoning_content = await self._parse_reasoning_content(
+                        c["choices"][0]["text"]
+                    )
                 else:
                     parsed_reasoning_content = {"text": "", "reasoning_text": ""}
-                return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(c, parsed_reasoning_content=parsed_reasoning_content)
+                return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(
+                    c, parsed_reasoning_content=parsed_reasoning_content
+                )

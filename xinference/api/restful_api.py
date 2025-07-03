@@ -2591,6 +2591,16 @@ class RESTfulAPI(CancelMixin):
             if raw_extra_body.get("format") is not None:
                 kwargs["format"] = raw_extra_body.get("format")
 
+            # SGLang structured output parameters
+            if raw_extra_body.get("json_schema") is not None:
+                kwargs["json_schema"] = raw_extra_body.get("json_schema")
+            if raw_extra_body.get("ebnf") is not None:
+                kwargs["ebnf"] = raw_extra_body.get("ebnf")
+            if raw_extra_body.get("regex") is not None:
+                kwargs["regex"] = raw_extra_body.get("regex")
+            if raw_extra_body.get("structural_tag") is not None:
+                kwargs["structural_tag"] = raw_extra_body.get("structural_tag")
+
         return kwargs
 
 

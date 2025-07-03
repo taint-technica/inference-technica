@@ -552,12 +552,6 @@ class ChatModelMixin:
         calls = parsed_calls.get("calls", []) if parsed_calls else []
         reasoning_content = parsed_reasoning_content.get("reasoning_text", "") if parsed_reasoning_content else ""
         content = parsed_reasoning_content.get("text", "") if parsed_reasoning_content else completion["choices"][0]["text"]
-        
-        logger.debug(f""" Note to debug:
-                     reasoning_content: {reasoning_content}
-                     content: {content}
-                     calls: {calls}
-                     """)
 
         tool_calls = []
         for call in calls:
