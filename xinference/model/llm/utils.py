@@ -174,8 +174,7 @@ class ChatModelMixin:
                     return json.loads(kwargs)
                 except json.JSONDecodeError:
                     raise TypeError(
-                        f"`chat_template_kwargs` should be json parsable, "
-                        f"got: {kwargs}"
+                        f"`chat_template_kwargs` should be json parsable, got: {kwargs}"
                     )
             elif isinstance(kwargs, dict):
                 return kwargs
@@ -261,7 +260,7 @@ class ChatModelMixin:
                         ret += role + "\n" + text + intra_message_sep + "\n"
                     else:
                         placeholders = "\n".join(
-                            f"Image-{i+1}: <image>\n"
+                            f"Image-{i + 1}: <image>\n"
                             for i in range(
                                 len(images) - len(image_futures), len(images)
                             )
@@ -534,6 +533,83 @@ class ChatModelMixin:
             "model": completion["model"],
             "choices": choices,  # type: ignore
             "usage": completion["usage"],
+        }
+
+    @staticmethod
+    def _convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(
+        completion: Completion,
+        parsed_calls: Optional[Dict] = None,
+        parsed_reasoning_content: Optional[Dict] = None,
+    ) -> ChatCompletion:
+        """
+        Convert parsed function calls to chat completion format
+        """
+
+        import json
+        import time
+        import uuid
+
+        calls = parsed_calls.get("calls", []) if parsed_calls else []
+        reasoning_content = parsed_reasoning_content.get("reasoning_text", "") if parsed_reasoning_content else ""
+        content = parsed_reasoning_content.get("text", "") if parsed_reasoning_content else completion["choices"][0]["text"]
+        
+        logger.debug(f""" Note to debug:
+                     reasoning_content: {reasoning_content}
+                     content: {content}
+                     calls: {calls}
+                     """)
+
+        tool_calls = []
+        for call in calls:
+            tool_calls.append(
+                {
+                    "id": f"call_{uuid.uuid4()}",
+                    "type": "function",
+                    "function": {
+                        "name": call["name"],
+                        "arguments": json.dumps(call["parameters"], ensure_ascii=False),
+                    },
+                }
+            )
+
+        finish_reason = "tool_calls" if tool_calls else "stop"
+        content = content if content.strip() else None
+
+        # For Qwen models, set content to empty string when there are tool calls
+        model_family = completion["model"]
+        if tool_calls and model_family in QWEN_TOOL_CALL_FAMILY and content is None:
+            content = ""
+
+        message = {
+            "role": "assistant",
+            "content": content,
+            "reasoning_content": reasoning_content,
+            "tool_calls": tool_calls,
+        }
+
+        # Get usage from completion or set default value
+        usage = completion.get(
+            "usage",
+            {
+                "prompt_tokens": -1,
+                "completion_tokens": -1,
+                "total_tokens": -1,
+            },
+        )
+
+        return {
+            "id": f"chatcmpl-{completion['id']}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": completion["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finish_reason,
+                }
+            ],
+            "usage": usage,
         }
 
     @staticmethod

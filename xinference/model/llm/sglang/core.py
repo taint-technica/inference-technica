@@ -65,6 +65,7 @@ class SGLANGGenerateConfig(TypedDict, total=False):
     ignore_eos: bool
     stream: bool
     stream_options: Optional[Union[dict, None]]
+    extra_body: Optional[Union[dict, None]]
 
 
 try:
@@ -119,6 +120,19 @@ SGLANG_SUPPORTED_CHAT_MODELS = [
     "HuatuoGPT-o1-Qwen2.5",
     "HuatuoGPT-o1-LLaMA-3.1",
 ]
+
+# Supported reasoning models in DeepSeek-R1/ DeepSeek-R1-distill series and Qwen3 and QwQ series
+SGLANG_SUPPORTED_REASONING_MODELS = [
+    "deepseek-r1",
+    "deepseek-r1-0528",
+    "deepseek-r1-0528-qwen3",
+    "deepseek-r1-distill-qwen",
+    "deepseek-r1-distill-llama",
+    "qwen3",
+    "QwQ-32B-Preview",
+    "QwQ-32B",
+]
+
 SGLANG_SUPPORTED_VISION_MODEL_LIST = [
     "qwen2.5-vl-instruct",
     "gemma-3-it",
@@ -138,6 +152,7 @@ class SGLANGModel(LLM):
         model_config: Optional[SGLANGModelConfig],
     ):
         super().__init__(model_uid, model_family, model_spec, quantization, model_path)
+        logger.debug(f"=====Model config: {model_config}")
         self._model_config = model_config
         self._engine = None
         self._address = model_config.pop("address", None)  # type: ignore
@@ -164,10 +179,10 @@ class SGLANGModel(LLM):
             raise ImportError(f"{error_message}\n\n{''.join(installation_guide)}")
 
         self._model_config = self._sanitize_model_config(self._model_config)
-        reasoning_content = self._model_config.pop("reasoning_content")
+        self.reasoning_content = self._model_config.pop("reasoning_content")
         enable_thinking = self._model_config.pop("enable_thinking", False)
         self.prepare_parse_reasoning_content(
-            reasoning_content, enable_thinking=enable_thinking
+            self.reasoning_content, enable_thinking=enable_thinking
         )
 
         # Fix: GH#2169
@@ -545,60 +560,7 @@ class SGLANGModel(LLM):
                     yield chunk
 
             return stream_results()
-
-
-class SGLANGChatModel(SGLANGModel, ChatModelMixin):
-    @classmethod
-    def match_json(
-        cls, llm_family: "LLMFamilyV1", llm_spec: "LLMSpecV1", quantization: str
-    ) -> bool:
-        if llm_spec.model_format not in ["pytorch", "gptq", "awq", "fp8"]:
-            return False
-        if llm_spec.model_format == "pytorch":
-            if quantization != "none" and quantization is not None:
-                return False
-        if isinstance(llm_family, CustomLLMFamilyV1):
-            if llm_family.model_family not in SGLANG_SUPPORTED_CHAT_MODELS:
-                return False
-        else:
-            if llm_family.model_name not in SGLANG_SUPPORTED_CHAT_MODELS:
-                return False
-        if "chat" not in llm_family.model_ability:
-            return False
-        return SGLANG_INSTALLED
-
-    def _sanitize_chat_config(
-        self,
-        generate_config: Optional[Dict] = None,
-    ) -> Dict:
-        if not generate_config:
-            generate_config = {}
-        if self.model_family.stop:
-            if (not generate_config.get("stop")) and self.model_family.stop:
-                generate_config["stop"] = self.model_family.stop.copy()
-        generate_config.pop("chat_template_kwargs", None)
-        return generate_config
-
-    def _get_tool_call_parser(self, model_family: str) -> str:
-        """
-        Get the appropriate tool call parser based on model family
-        """
-        from ..utils import (
-            DEEPSEEK_TOOL_CALL_FAMILY,
-            LLAMA3_TOOL_CALL_FAMILY,
-            QWEN_TOOL_CALL_FAMILY,
-        )
-
-        if model_family in QWEN_TOOL_CALL_FAMILY:
-            return "qwen25"
-        elif model_family in DEEPSEEK_TOOL_CALL_FAMILY:
-            return "deepseek"
-        elif model_family in LLAMA3_TOOL_CALL_FAMILY:
-            return "llama3"
-        else:
-            # Default to qwen25 for unknown models
-            return "qwen25"
-
+    
     async def _parse_function_calls(
         self,
         generated_text: str,
@@ -636,72 +598,93 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
                 else:
                     logger.warning(f"Failed to parse function calls: {response.status}")
                     return {"normal_text": generated_text, "calls": []}
-
-    def _convert_parsed_calls_to_chat_completion(
-        self, completion: Completion, parsed_calls: Dict, request_id: str
-    ) -> ChatCompletion:
+    
+    async def _parse_reasoning_content(
+        self,
+        generated_text: str,
+    ) -> Dict:
         """
-        Convert parsed function calls to chat completion format
+        Parse reasoning content from generated text with sglang /separate_reasoning endpoint
         """
-        import json
-        import time
-        import uuid
-
-        normal_text = parsed_calls.get("normal_text", "")
-        calls = parsed_calls.get("calls", [])
-
-        tool_calls = []
-        for call in calls:
-            tool_calls.append(
-                {
-                    "id": f"call_{uuid.uuid4()}",
-                    "type": "function",
-                    "function": {
-                        "name": call["name"],
-                        "arguments": json.dumps(call["parameters"], ensure_ascii=False),
-                    },
-                }
-            )
-
-        finish_reason = "tool_calls" if tool_calls else "stop"
-        content = normal_text if normal_text.strip() else None
-
-        # For Qwen models, set content to empty string when there are tool calls
-        from ..utils import QWEN_TOOL_CALL_FAMILY
-
-        model_family = self.model_family.model_family or self.model_family.model_name
-        if tool_calls and model_family in QWEN_TOOL_CALL_FAMILY and content is None:
-            content = ""
-
-        message = {
-            "role": "assistant",
-            "content": content,
-            "tool_calls": tool_calls,
+        import aiohttp
+        
+        parse_url = (
+            f"{self._engine.generate_url.replace('/generate', '/separate_reasoning')}"
+        )
+        
+        # "qwen3" if model is in Qwen3 and QwQ series, "deepseek-r1" if model is in DeepSeek-R1 series
+        model_name = self.model_family.model_name
+        if (model_name.lower().startswith("qwq") or model_name.lower().startswith("qwen3")):
+            reasoning_parser = "qwen3"
+        elif model_name.lower().startswith("deepseek-r1"):
+            reasoning_parser = "deepseek-r1"
+        else:
+            raise ValueError(f"Unsupported model: {model_name}")
+        
+        separate_reasoning_data = {
+            "text": generated_text,
+            "reasoning_parser": reasoning_parser,
         }
-
-        usage = completion.get(
-            "usage",
-            {
-                "prompt_tokens": -1,
-                "completion_tokens": -1,
-                "total_tokens": -1,
-            },
+                
+        async with aiohttp.ClientSession(trust_env=True) as session:
+            async with session.post(parse_url, json=separate_reasoning_data) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    return {"normal_text": generated_text, "reasoning_content": ""}
+    
+    def _get_tool_call_parser(self, model_family: str) -> str:
+        """
+        Get the appropriate tool call parser based on model family
+        """
+        from ..utils import (
+            DEEPSEEK_TOOL_CALL_FAMILY,
+            LLAMA3_TOOL_CALL_FAMILY,
+            QWEN_TOOL_CALL_FAMILY,
         )
 
-        return {
-            "id": f"chatcmpl-{request_id}",
-            "model": self.model_uid,
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "choices": [
-                {
-                    "index": 0,
-                    "message": message,
-                    "finish_reason": finish_reason,
-                }
-            ],
-            "usage": usage,
-        }
+        if model_family in QWEN_TOOL_CALL_FAMILY:
+            return "qwen25"
+        elif model_family in DEEPSEEK_TOOL_CALL_FAMILY:
+            return "deepseek"
+        elif model_family in LLAMA3_TOOL_CALL_FAMILY:
+            return "llama3"
+        else:
+            # Default to qwen25 for unknown models
+            return "qwen25"
+
+
+class SGLANGChatModel(SGLANGModel, ChatModelMixin):
+    @classmethod
+    def match_json(
+        cls, llm_family: "LLMFamilyV1", llm_spec: "LLMSpecV1", quantization: str
+    ) -> bool:
+        if llm_spec.model_format not in ["pytorch", "gptq", "awq", "fp8"]:
+            return False
+        if llm_spec.model_format == "pytorch":
+            if quantization != "none" and quantization is not None:
+                return False
+        if isinstance(llm_family, CustomLLMFamilyV1):
+            if llm_family.model_family not in SGLANG_SUPPORTED_CHAT_MODELS:
+                return False
+        else:
+            if llm_family.model_name not in SGLANG_SUPPORTED_CHAT_MODELS:
+                return False
+        if "chat" not in llm_family.model_ability:
+            return False
+        return SGLANG_INSTALLED
+
+    def _sanitize_chat_config(
+        self,
+        generate_config: Optional[Dict] = None,
+    ) -> Dict:
+        if not generate_config:
+            generate_config = {}
+        if self.model_family.stop:
+            if (not generate_config.get("stop")) and self.model_family.stop:
+                generate_config["stop"] = self.model_family.stop.copy()
+        generate_config.pop("chat_template_kwargs", None)
+        return generate_config
 
     async def async_chat(
         self,
@@ -710,6 +693,8 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         request_id: Optional[str] = None,
     ) -> Union[ChatCompletion, AsyncGenerator[ChatCompletionChunk, None]]:
         assert self.model_family.chat_template is not None
+        
+        logger.debug(f"=====Generate config: {generate_config}")
 
         # Extract tools from generate_config and ensure it's a concrete list
         tools = generate_config.pop("tools", []) if generate_config else None
@@ -746,9 +731,6 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         generate_config = self._sanitize_chat_config(generate_config)
         stream = generate_config.get("stream", None)
 
-        if not request_id:
-            request_id = str(uuid.uuid1())
-
         if stream:
             # For streaming, we currently don't support function call parsing
             # This would require more complex implementation to handle partial responses
@@ -764,12 +746,23 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
             # If tools are provided, parse function calls
             if tools:
                 generated_text = c["choices"][0]["text"]
+                
                 parsed_calls = await self._parse_function_calls(generated_text, tools)
-                return self._convert_parsed_calls_to_chat_completion(
-                    c, parsed_calls, request_id
+                
+                if self.reasoning_content and self.model_family.model_name in SGLANG_SUPPORTED_REASONING_MODELS:
+                    parsed_reasoning_content = await self._parse_reasoning_content(parsed_calls.get("normal_text", ""))
+                else:
+                    parsed_reasoning_content = {"text": "", "reasoning_text": ""}
+                    
+                return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(
+                    c, parsed_calls, parsed_reasoning_content
                 )
             else:
-                return self._to_chat_completion(c, self.reasoning_parser)
+                if self.reasoning_content and self.model_family.model_name in SGLANG_SUPPORTED_REASONING_MODELS:
+                    parsed_reasoning_content = await self._parse_reasoning_content(c["choices"][0]["text"])
+                else:
+                    parsed_reasoning_content = {"text": "", "reasoning_text": ""}
+                return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(c, parsed_reasoning_content=parsed_reasoning_content)
 
 
 class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
@@ -896,8 +889,19 @@ class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
             if tools:
                 generated_text = c["choices"][0]["text"]
                 parsed_calls = await self._parse_function_calls(generated_text, tools)
-                return self._convert_parsed_calls_to_chat_completion(
-                    c, parsed_calls, request_id
+                
+                # Check if model config has reasoning_content enabled
+                if self._model_config.get("reasoning_content", False) and self.model_family.model_name in SGLANG_SUPPORTED_REASONING_MODELS:
+                    parsed_reasoning_content = await self._parse_reasoning_content(parsed_calls.get("normal_text", ""))
+                else:
+                    parsed_reasoning_content = {"text": "", "reasoning_text": ""}
+                    
+                return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(
+                    c, parsed_calls, parsed_reasoning_content
                 )
             else:
-                return self._to_chat_completion(c, self.reasoning_parser)
+                if self.reasoning_content and self.model_family.model_name in SGLANG_SUPPORTED_REASONING_MODELS:
+                    parsed_reasoning_content = await self._parse_reasoning_content(c["choices"][0]["text"])
+                else:
+                    parsed_reasoning_content = {"text": "", "reasoning_text": ""}
+                return self._convert_parsed_tool_calls_and_reason_content_to_chat_completion_sglang(c, parsed_reasoning_content=parsed_reasoning_content)
