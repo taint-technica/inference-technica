@@ -843,6 +843,12 @@ class ModelActor(xo.StatelessActor, CancelMixin):
     async def chat(self, messages: List[Dict], *args, **kwargs):
         start_time = time.time()
         response = None
+        
+        ## Log value to debug
+        logger.debug(f"=====Chat kwargs: {kwargs}")
+        logger.debug(f"=====Chat args: {args}")
+        logger.debug(f"=====Chat messages: {messages}")
+        
         try:
             if self.allow_batching():
                 # not support request_id
@@ -851,7 +857,24 @@ class ModelActor(xo.StatelessActor, CancelMixin):
                     messages, "chat", *args, **kwargs
                 )
             else:
-                kwargs.pop("raw_params", None)
+                # Extract raw_params and merge structured output parameters
+                raw_params = kwargs.pop("raw_params", {})
+
+                # Merge structured output parameters from raw_params to generate_config key in kwargs
+                structured_output_params = [
+                    "ebnf",
+                    "json_schema",
+                    "regex",
+                    "structural_tag",
+                ]
+                for param in structured_output_params:
+                    if param in raw_params:
+                        args[0][param] = raw_params[param]
+
+                logger.debug(f"=====Chat args after merge structured output parameters: {args}")
+                logger.debug(f"=====Chat kwargs after merge structured output parameters: {kwargs}")
+                logger.debug(f"=====Chat messages after merge structured output parameters: {messages}")
+
                 if hasattr(self._model, "chat"):
                     # not support request_id
                     kwargs.pop("request_id", None)

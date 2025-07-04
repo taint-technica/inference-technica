@@ -65,7 +65,6 @@ class SGLANGGenerateConfig(TypedDict, total=False):
     ignore_eos: bool
     stream: bool
     stream_options: Optional[Union[dict, None]]
-    extra_body: Optional[Union[dict, None]]
     # SGLang structured output parameters
     json_schema: Optional[Union[str, dict]]
     ebnf: Optional[str]
@@ -494,6 +493,9 @@ class SGLANGModel(LLM):
         import aiohttp
 
         sampling_params = self._filter_sampling_params(sampling_params)
+        
+        logger.debug(f"=====Non-stream generate params: {sampling_params}")
+        
         json_data = {
             "text": prompt,
             "image_data": image_data,
@@ -504,6 +506,7 @@ class SGLANGModel(LLM):
                 self._engine.generate_url,
                 json=json_data,  # type: ignore
             ) as response:
+                logger.debug(f"=====Non-stream generate response: {response}")
                 return await response.json()
 
     async def async_generate(
@@ -532,6 +535,7 @@ class SGLANGModel(LLM):
             state = await self._non_stream_generate(
                 prompt, image_data, **sanitized_generate_config
             )
+            logger.debug(f"=====Non-stream generate state: {state}")
             return self._convert_state_to_completion(
                 request_id,
                 model=self.model_uid,
@@ -734,6 +738,15 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         assert self.model_family.chat_template is not None
 
         logger.debug(f"=====Generate config: {generate_config}")
+        
+        ##############################################################################
+        # Detach structured output parameters from generate_config to re-use after
+        cached_structured_output_params = {}
+        structured_output_params = ["ebnf", "json_schema", "regex", "structural_tag"]
+        for param in structured_output_params:
+            if param in generate_config:
+                cached_structured_output_params[param] = generate_config.pop(param)
+        ##############################################################################
 
         # Extract tools from generate_config and ensure it's a concrete list
         tools = generate_config.pop("tools", []) if generate_config else None
@@ -767,6 +780,14 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
         full_prompt = self.get_full_context(
             messages, self.model_family.chat_template, **full_context_kwargs
         )
+        
+        ##############################################################################
+        # Attach structured output parameters to full_prompt
+        for param in structured_output_params:
+            if param in cached_structured_output_params:
+                generate_config[param] = cached_structured_output_params[param]
+        ##############################################################################
+        
         generate_config = self._sanitize_chat_config(generate_config)
         stream = generate_config.get("stream", None)
 
