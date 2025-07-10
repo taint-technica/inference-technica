@@ -747,6 +747,10 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
             if param in generate_config:
                 cached_structured_output_params[param] = generate_config.pop(param)
         ##############################################################################
+        
+        # Remove the "parallel_tool_call" and "tool_choice" from generate_config
+        generate_config.pop("parallel_tool_call", None)
+        generate_config.pop("tool_choice", None)
 
         # Extract tools from generate_config and ensure it's a concrete list
         tools = generate_config.pop("tools", []) if generate_config else None
@@ -891,6 +895,10 @@ class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
         # Extract tools from generate_config
         tools = generate_config.pop("tools", []) if generate_config else None
         model_family = self.model_family.model_family or self.model_family.model_name
+        
+        # Remove the "parallel_tool_call" and "tool_choice" from generate_config
+        generate_config.pop("parallel_tool_call", None)
+        generate_config.pop("tool_choice", None)
 
         chat_template: str = (
             self.model_family.chat_template if self.model_family.chat_template else ""
