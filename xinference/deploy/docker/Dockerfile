@@ -63,6 +63,7 @@ RUN pip install --upgrade -i "$PIP_INDEX" pip setuptools wheel && \
     cd /opt && \
     git clone https://github.com/taint-technica/sglang-technica.git && \
     cd sglang-technica && \
+    git checkout 359f694 && \
     uv pip install --system -e "python[all]" && \
     cd /opt/inference
 
