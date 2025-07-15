@@ -323,7 +323,7 @@ class SGLANGModel(LLM):
         # 16 is too less, so here set 256 by default
         generate_config.setdefault(
             "max_new_tokens",
-            generate_config.pop("max_tokens", 256),  # type: ignore
+            generate_config.pop("max_tokens", 5000),  # type: ignore
         )
         generate_config.setdefault("stop", [])
         generate_config.setdefault("stream", False)
@@ -748,8 +748,8 @@ class SGLANGChatModel(SGLANGModel, ChatModelMixin):
                 cached_structured_output_params[param] = generate_config.pop(param)
         ##############################################################################
         
-        # Remove the "parallel_tool_call" and "tool_choice" from generate_config
-        generate_config.pop("parallel_tool_call", None)
+        # Remove the "parallel_tool_calls" and "tool_choice" from generate_config
+        generate_config.pop("parallel_tool_calls", None)
         generate_config.pop("tool_choice", None)
 
         # Extract tools from generate_config and ensure it's a concrete list
@@ -896,8 +896,8 @@ class SGLANGVisionModel(SGLANGModel, ChatModelMixin):
         tools = generate_config.pop("tools", []) if generate_config else None
         model_family = self.model_family.model_family or self.model_family.model_name
         
-        # Remove the "parallel_tool_call" and "tool_choice" from generate_config
-        generate_config.pop("parallel_tool_call", None)
+        # Remove the "parallel_tool_calls" and "tool_choice" from generate_config
+        generate_config.pop("parallel_tool_calls", None)
         generate_config.pop("tool_choice", None)
 
         chat_template: str = (

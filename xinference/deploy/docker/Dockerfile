@@ -94,4 +94,4 @@ RUN /opt/conda/bin/conda create -n ffmpeg-env -c conda-forge 'ffmpeg<7' -y && \
 
 # Overwrite the entrypoint of vllm's base image
 ENTRYPOINT ["xinference-local"]
-CMD ["--host", "0.0.0.0", "--port", "9997"]
+CMD ["--log-level", "debug", "--host", "0.0.0.0", "--port", "9997"]

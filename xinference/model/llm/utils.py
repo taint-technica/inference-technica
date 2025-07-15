@@ -206,6 +206,30 @@ class ChatModelMixin:
                     texts = "\n".join(item.get("text", "") for item in msg_content)
             if texts:
                 message["content"] = texts
+            elif "content" not in message:
+                # Ensure all messages have a content field, even if empty
+                message["content"] = ""
+            
+            # Fix tool message format issues
+            if message.get("role") == "tool":
+                # Find tool_call_id field (might have incorrect key name)
+                tool_call_id = None
+                keys_to_remove = []
+                
+                for key, value in message.items():
+                    if key.startswith("tool_call_") and key != "tool_call_id":
+                        tool_call_id = value if isinstance(value, str) else key.replace("tool_call_", "call_")
+                        keys_to_remove.append(key)
+                
+                # Remove incorrect keys and set proper tool_call_id
+                for key in keys_to_remove:
+                    del message[key]
+                
+                if tool_call_id:
+                    message["tool_call_id"] = tool_call_id
+                elif "tool_call_id" not in message:
+                    message["tool_call_id"] = "unknown_call_id"
+                    
         return messages
 
     @staticmethod
@@ -555,23 +579,36 @@ class ChatModelMixin:
 
         tool_calls = []
         for call in calls:
+            # Handle arguments properly: if already a string, use as-is; if object, json.dumps it
+            arguments = call["parameters"]
+            if isinstance(arguments, str):
+                # Already a JSON string, use as-is
+                arguments_str = arguments
+            else:
+                # Convert object to JSON string
+                arguments_str = json.dumps(arguments, ensure_ascii=False)
+            
             tool_calls.append(
                 {
                     "id": f"call_{uuid.uuid4()}",
                     "type": "function",
                     "function": {
                         "name": call["name"],
-                        "arguments": json.dumps(call["parameters"], ensure_ascii=False),
+                        "arguments": arguments_str,
                     },
                 }
             )
 
         finish_reason = "tool_calls" if tool_calls else "stop"
-        content = content if content.strip() else None
+        content = content if content and content.strip() else ""
 
         # For Qwen models, set content to empty string when there are tool calls
         model_family = completion["model"]
         if tool_calls and model_family in QWEN_TOOL_CALL_FAMILY and content is None:
+            content = ""
+
+        # Ensure content is never None to avoid chat template errors with |trim filter
+        if content is None:
             content = ""
 
         message = {
@@ -779,6 +816,14 @@ class ChatModelMixin:
         failed_contents = []
         for content, func, args in tool_result:
             if func:
+                # Handle arguments properly: if already a string, use as-is; if object, json.dumps it
+                if isinstance(args, str):
+                    # Already a JSON string, use as-is
+                    arguments_str = args
+                else:
+                    # Convert object to JSON string
+                    arguments_str = json.dumps(args, ensure_ascii=False)
+                
                 tool_calls.append(
                     {
                         "index": 0,
@@ -786,7 +831,7 @@ class ChatModelMixin:
                         "type": "function",
                         "function": {
                             "name": func,
-                            "arguments": json.dumps(args, ensure_ascii=False),
+                            "arguments": arguments_str,
                         },
                     }
                 )
@@ -799,6 +844,10 @@ class ChatModelMixin:
         # fix: qwen tool_call content field return null
         family = model_family.model_family or model_family.model_name
         if tool_calls and family in QWEN_TOOL_CALL_FAMILY and content is None:
+            content = ""
+
+        # Ensure content is never None to avoid chat template errors with |trim filter
+        if content is None:
             content = ""
 
         d = {
@@ -857,13 +906,21 @@ class ChatModelMixin:
         failed_contents = []
         for content, func, args in tool_result:
             if func:
+                # Handle arguments properly: if already a string, use as-is; if object, json.dumps it
+                if isinstance(args, str):
+                    # Already a JSON string, use as-is
+                    arguments_str = args
+                else:
+                    # Convert object to JSON string
+                    arguments_str = json.dumps(args, ensure_ascii=False)
+                
                 tool_calls.append(
                     {
                         "id": f"call_{_id}",
                         "type": "function",
                         "function": {
                             "name": func,
-                            "arguments": json.dumps(args, ensure_ascii=False),
+                            "arguments": arguments_str,
                         },
                     }
                 )
@@ -877,6 +934,10 @@ class ChatModelMixin:
         # fix: qwen tool_call content field return null
         family = model_family.model_family or model_family.model_name
         if tool_calls and family in QWEN_TOOL_CALL_FAMILY and content is None:
+            content = ""
+
+        # Ensure content is never None to avoid chat template errors with |trim filter
+        if content is None:
             content = ""
 
         m = {
