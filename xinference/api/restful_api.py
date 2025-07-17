@@ -212,6 +212,85 @@ class BuildGradioMediaInterfaceRequest(BaseModel):
     model_ability: List[str]
 
 
+class LaunchModelRequest(BaseModel):
+    model_uid: Optional[str] = Field(None, description="Unique identifier for the model instance (auto-generated if not provided)")
+    model_name: str = Field(description="Name of the model to launch")
+    model_engine: Optional[str] = Field(None, description="Engine to use (vllm, transformers, etc.). Required for LLM models")
+    model_size_in_billions: Optional[int] = Field(None, description="Size of the model in billions of parameters")
+    model_format: Optional[str] = Field(None, description="Format of the model (pytorch, gguf, etc.)")
+    quantization: Optional[str] = Field(None, description="Quantization method (int4, int8, etc.)")
+    model_type: Optional[str] = Field("LLM", description="Type of model (LLM, image, audio, etc.)")
+    replica: Optional[int] = Field(1, description="Number of replicas to create")
+    n_gpu: Optional[Union[str, int]] = Field("auto", description="Number of GPUs to use or 'auto' for automatic detection")
+    request_limits: Optional[int] = Field(None, description="Maximum number of concurrent requests")
+    peft_model_config: Optional[Dict[str, Any]] = Field(None, description="PEFT (Parameter Efficient Fine-Tuning) configuration")
+    worker_ip: Optional[str] = Field(None, description="IP address of the worker to use")
+    gpu_idx: Optional[List[int]] = Field(None, description="Specific GPU indices to use")
+    download_hub: Optional[str] = Field(None, description="Hub to download model from (huggingface, modelscope, etc.)")
+    model_path: Optional[str] = Field(None, description="Local path to the model files")
+    
+    class Config:
+        schema_extra = {
+            "examples": {
+                "basic_llm": {
+                    "summary": "Basic LLM Launch",
+                    "description": "Launch a basic LLM model with default settings",
+                    "value": {
+                        "model_name": "qwen-chat",
+                        "model_engine": "vllm",
+                        "model_size_in_billions": 7,
+                        "model_format": "pytorch",
+                        "model_type": "LLM"
+                    }
+                },
+                "quantized_llm": {
+                    "summary": "Quantized LLM Launch",
+                    "description": "Launch a quantized LLM model to save memory",
+                    "value": {
+                        "model_name": "qwen-chat",
+                        "model_engine": "vllm",
+                        "model_size_in_billions": 14,
+                        "model_format": "pytorch",
+                        "quantization": "int4",
+                        "model_type": "LLM",
+                        "replica": 1,
+                        "n_gpu": 1
+                    }
+                },
+                "multi_replica": {
+                    "summary": "Multi-Replica Launch",
+                    "description": "Launch multiple replicas for load balancing",
+                    "value": {
+                        "model_name": "qwen-chat",
+                        "model_engine": "vllm",
+                        "model_size_in_billions": 7,
+                        "model_format": "pytorch",
+                        "model_type": "LLM",
+                        "replica": 3,
+                        "n_gpu": 2,
+                        "request_limits": 100
+                    }
+                },
+                "image_model": {
+                    "summary": "Image Model Launch",
+                    "description": "Launch an image generation model",
+                    "value": {
+                        "model_name": "stable-diffusion-xl-base-1.0",
+                        "model_type": "image",
+                        "model_format": "pytorch",
+                        "n_gpu": 1
+                    }
+                }
+            }
+        }
+
+
+class LaunchModelResponse(BaseModel):
+    model_uid: str = Field(description="Unique identifier of the launched model instance")
+
+
+
+
 class RESTfulAPI(CancelMixin):
     def __init__(
         self,
@@ -434,6 +513,9 @@ class RESTfulAPI(CancelMixin):
             "/v1/models",
             self.list_models,
             methods=["GET"],
+            summary="List Models",
+            description="Retrieve a list of all available and currently running models. Returns an object with 'object': 'list' and 'data' array containing model information.",
+            tags=["Models"],
             dependencies=(
                 [Security(self._auth_service, scopes=["models:list"])]
                 if self.is_authenticated()
@@ -445,6 +527,9 @@ class RESTfulAPI(CancelMixin):
             "/v1/models/{model_uid}",
             self.describe_model,
             methods=["GET"],
+            summary="Get Model Details",
+            description="Retrieve detailed information about a specific model by its UID. Returns model configuration including name, type, engine, format, quantization, abilities, and runtime information.",
+            tags=["Models"],
             dependencies=(
                 [Security(self._auth_service, scopes=["models:list"])]
                 if self.is_authenticated()
@@ -485,6 +570,28 @@ class RESTfulAPI(CancelMixin):
             "/v1/models",
             self.launch_model,
             methods=["POST"],
+            summary="Launch Model",
+            description="""Launch a new model instance with specified configuration.
+            
+**Request Body Parameters:**
+- `model_name` (required): Name of the model to launch
+- `model_engine`: Engine to use (vllm, transformers, etc.)
+- `model_type`: Type of model (LLM, image, audio, etc.)
+- `model_size_in_billions`: Size of the model in billions of parameters
+- `model_format`: Format of the model (pytorch, gguf, etc.)
+- `quantization`: Quantization method (int4, int8, etc.)
+- `replica`: Number of replicas to create
+- `n_gpu`: Number of GPUs to use or 'auto' for automatic detection
+- `request_limits`: Maximum number of concurrent requests
+- `gpu_idx`: Specific GPU indices to use
+- `download_hub`: Hub to download model from (huggingface, modelscope, etc.)
+- `model_path`: Local path to the model files
+
+**Query Parameters:**
+- `wait_ready`: Whether to wait for the model to be ready before returning
+
+**Returns:** Object with `model_uid` field containing the launched model's unique identifier.""",
+            tags=["Models"],
             dependencies=(
                 [Security(self._auth_service, scopes=["models:start"])]
                 if self.is_authenticated()
@@ -495,6 +602,9 @@ class RESTfulAPI(CancelMixin):
             "/v1/models/{model_uid}",
             self.terminate_model,
             methods=["DELETE"],
+            summary="Terminate Model",
+            description="Terminate a running model instance by its UID. Returns success message upon completion.",
+            tags=["Models"],
             dependencies=(
                 [Security(self._auth_service, scopes=["models:stop"])]
                 if self.is_authenticated()
@@ -505,6 +615,9 @@ class RESTfulAPI(CancelMixin):
             "/v1/models/{model_uid}/progress",
             self.get_launch_model_progress,
             methods=["GET"],
+            summary="Get Model Launch Progress",
+            description="Get the progress of a model launch operation. Returns object with 'progress' field containing a float value (0.0 to 1.0) or null if not available.",
+            tags=["Models"],
             dependencies=(
                 [Security(self._auth_service, scopes=["models:read"])]
                 if self.is_authenticated()
@@ -515,6 +628,9 @@ class RESTfulAPI(CancelMixin):
             "/v1/models/{model_uid}/cancel",
             self.cancel_launch_model,
             methods=["POST"],
+            summary="Cancel Model Launch",
+            description="Cancel an ongoing model launch operation. Returns success message upon completion.",
+            tags=["Models"],
             dependencies=(
                 [Security(self._auth_service, scopes=["models:stop"])]
                 if self.is_authenticated()
@@ -973,6 +1089,23 @@ class RESTfulAPI(CancelMixin):
             raise HTTPException(status_code=500, detail=str(e))
 
     async def list_models(self) -> JSONResponse:
+        """
+        List all available models
+        
+        Returns:
+            JSONResponse: Object containing:
+                - object: "list"
+                - data: Array of model objects with fields:
+                    - id: Model identifier
+                    - object: "model"
+                    - created: Creation timestamp
+                    - owned_by: "xinference"
+                    - model_type: Type of model (LLM, image, etc.)
+                    - model_name: Name of the model
+                    - model_engine: Engine used (vllm, transformers, etc.)
+                    - model_format: Format (pytorch, gguf, etc.)
+                    - Additional model-specific fields
+        """
         try:
             models = await (await self._get_supervisor_ref()).list_models()
 
@@ -995,6 +1128,27 @@ class RESTfulAPI(CancelMixin):
             raise HTTPException(status_code=500, detail=str(e))
 
     async def describe_model(self, model_uid: str) -> JSONResponse:
+        """
+        Get detailed information about a specific model
+        
+        Args:
+            model_uid: Unique identifier of the model
+            
+        Returns:
+            JSONResponse: Model details containing:
+                - model_type: Type of model (LLM, image, etc.)
+                - model_name: Name of the model
+                - model_engine: Engine used (vllm, transformers, etc.)
+                - model_format: Format (pytorch, gguf, etc.)
+                - model_size_in_billions: Size of the model
+                - quantization: Quantization method used
+                - model_family: Model family (llama, qwen, etc.)
+                - model_ability: List of capabilities
+                - context_length: Maximum context length
+                - model_uid: Unique identifier
+                - create_time: Creation timestamp
+                - Additional runtime information
+        """
         try:
             data = await (await self._get_supervisor_ref()).describe_model(model_uid)
             return JSONResponse(content=data)
@@ -1007,25 +1161,61 @@ class RESTfulAPI(CancelMixin):
             raise HTTPException(status_code=500, detail=str(e))
 
     async def launch_model(
-        self, request: Request, wait_ready: bool = Query(True)
+        self, request: Request, wait_ready: bool = Query(True, description="Whether to wait for the model to be ready before returning response")
     ) -> JSONResponse:
-        payload = await request.json()
-        model_uid = payload.get("model_uid")
-        model_name = payload.get("model_name")
-        model_engine = payload.get("model_engine")
-        model_size_in_billions = payload.get("model_size_in_billions")
-        model_format = payload.get("model_format")
-        quantization = payload.get("quantization")
-        model_type = payload.get("model_type", "LLM")
-        replica = payload.get("replica", 1)
-        n_gpu = payload.get("n_gpu", "auto")
-        request_limits = payload.get("request_limits", None)
-        peft_model_config = payload.get("peft_model_config", None)
-        worker_ip = payload.get("worker_ip", None)
-        gpu_idx = payload.get("gpu_idx", None)
-        download_hub = payload.get("download_hub", None)
-        model_path = payload.get("model_path", None)
+        """
+        Launch a new model instance
+        
+        Args:
+            request: HTTP request containing model launch parameters
+            wait_ready: Whether to wait for the model to be ready before returning
+            
+        Request Body (LaunchModelRequest):
+            model_uid: Optional unique identifier (auto-generated if not provided)
+            model_name: Name of the model to launch (required)
+            model_engine: Engine to use (vllm, transformers, etc.)
+            model_size_in_billions: Size of the model in billions of parameters
+            model_format: Format of the model (pytorch, gguf, etc.)
+            quantization: Quantization method (int4, int8, etc.)
+            model_type: Type of model (LLM, image, audio, etc.)
+            replica: Number of replicas to create
+            n_gpu: Number of GPUs to use or 'auto' for automatic detection
+            request_limits: Maximum number of concurrent requests
+            peft_model_config: PEFT configuration for fine-tuning
+            worker_ip: IP address of the worker to use
+            gpu_idx: Specific GPU indices to use
+            download_hub: Hub to download model from
+            model_path: Local path to the model files
+            
+        Returns:
+            JSONResponse: Object containing:
+                - model_uid: Unique identifier of the launched model instance
+        """
+        try:
+            payload = await request.json()
+            # Validate request body using schema
+            body = LaunchModelRequest.parse_obj(payload)
+        except Exception as e:
+            logger.error(f"Invalid request body: {e}")
+            raise HTTPException(status_code=400, detail=f"Invalid request body: {e}")
+        
+        model_uid = body.model_uid
+        model_name = body.model_name
+        model_engine = body.model_engine
+        model_size_in_billions = body.model_size_in_billions
+        model_format = body.model_format
+        quantization = body.quantization
+        model_type = body.model_type
+        replica = body.replica
+        n_gpu = body.n_gpu
+        request_limits = body.request_limits
+        peft_model_config = body.peft_model_config
+        worker_ip = body.worker_ip
+        gpu_idx = body.gpu_idx
+        download_hub = body.download_hub
+        model_path = body.model_path
 
+        # Get additional parameters not in the main schema
         exclude_keys = {
             "model_uid",
             "model_name",
@@ -1124,6 +1314,17 @@ class RESTfulAPI(CancelMixin):
         return JSONResponse(content=infos)
 
     async def get_launch_model_progress(self, model_uid: str) -> JSONResponse:
+        """
+        Get the progress of a model launch operation
+        
+        Args:
+            model_uid: Unique identifier of the model being launched
+            
+        Returns:
+            JSONResponse: Object containing:
+                - progress: Float value between 0.0 and 1.0 indicating completion percentage,
+                           or null if progress information is not available
+        """
         try:
             progress = await (
                 await self._get_supervisor_ref()
@@ -1134,6 +1335,16 @@ class RESTfulAPI(CancelMixin):
         return JSONResponse(content={"progress": progress})
 
     async def cancel_launch_model(self, model_uid: str) -> JSONResponse:
+        """
+        Cancel an ongoing model launch operation
+        
+        Args:
+            model_uid: Unique identifier of the model launch to cancel
+            
+        Returns:
+            JSONResponse: Object containing:
+                - message: Success message confirming cancellation
+        """
         try:
             await (await self._get_supervisor_ref()).cancel_launch_builtin_model(
                 model_uid
@@ -1141,7 +1352,7 @@ class RESTfulAPI(CancelMixin):
         except Exception as e:
             logger.error(str(e), exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
-        return JSONResponse(content=None)
+        return JSONResponse(content={"message": "Model launch cancelled successfully"})
 
     async def launch_model_by_version(
         self, request: Request, wait_ready: bool = Query(True)
@@ -1291,6 +1502,16 @@ class RESTfulAPI(CancelMixin):
         return JSONResponse(content={"model_uid": model_uid})
 
     async def terminate_model(self, model_uid: str) -> JSONResponse:
+        """
+        Terminate a running model instance
+        
+        Args:
+            model_uid: Unique identifier of the model to terminate
+            
+        Returns:
+            JSONResponse: Object containing:
+                - message: Success message confirming termination
+        """
         try:
             assert self._app is not None
             await (await self._get_supervisor_ref()).terminate_model(model_uid)
@@ -1309,7 +1530,7 @@ class RESTfulAPI(CancelMixin):
         except Exception as e:
             logger.error(e, exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
-        return JSONResponse(content=None)
+        return JSONResponse(content={"message": "Model terminated successfully"})
 
     async def get_address(self) -> JSONResponse:
         return JSONResponse(content=self._supervisor_address)
